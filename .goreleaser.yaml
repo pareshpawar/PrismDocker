@@ -11,7 +11,7 @@ before:
 builds:
   - id: prismdocker
     main: .
-    binary: prismdocker
+    binary: prism
     dir: prismdocker
     env:
       - CGO_ENABLED=0
@@ -36,7 +36,7 @@ archives:
       {{- else }}{{ .Arch }}{{ end }}
 
 homebrew_casks:
-  - name: prismdocker
+  - name: prism
     ids: [prismdocker]
     repository:
       owner: pareshpawar
@@ -51,7 +51,7 @@ homebrew_casks:
         install: |
           if OS.mac?
             system_command "/usr/bin/xattr",
-                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/prismdocker"]
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/prism"]
           end
 
 changelog:
@@ -74,7 +74,8 @@ release:
     **Install via Homebrew:**
     ```
     brew tap pareshpawar/tap
-    brew install pareshpawar/tap/prismdocker
+    ```
+    ```
+    brew install pareshpawar/tap/prism
     ```
 
-    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
