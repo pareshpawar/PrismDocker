@@ -7,6 +7,13 @@ import (
 
 type SortOrder int
 
+type ActiveView int
+
+const (
+	viewContainers ActiveView = iota
+	viewLogs
+)
+
 const (
 	SortByID SortOrder = iota
 	SortByName
@@ -37,18 +44,31 @@ func (s SortOrder) String() string {
 
 type model struct {
 	dockerClient       *client.Client
-	allContainers      []Container // Store all fetched containers
-	filteredContainers []Container // Store containers to display
+	allContainers      []Container
+	filteredContainers []Container
 	cursor             int
 	err                error
 	width              int
 	height             int
 	sortOrder          SortOrder
-	showAll            bool // True = show all, False = show running only
+	showAll            bool
 	tick               int
-	tableOffset        int // Vertical scroll offset for the table
+	tableOffset        int
 	showStats          bool
-	stats              map[string]Stats // Cache stats by Container ID
+	stats              map[string]Stats
+	// Action confirm dialog
+	confirmMode   bool
+	confirmAction string // "remove"
+	// Brief status message shown in footer
+	statusMsg  string
+	statusTick int // countdown to clear statusMsg
+	// Log viewer
+	activeView    ActiveView
+	logLines      []string
+	logFilter     string
+	logFilterMode bool
+	logOffset     int
+	logContainer  string // ID of container being viewed
 }
 
 func initialModel() model {
@@ -62,11 +82,12 @@ func initialModel() model {
 		allContainers:      []Container{},
 		filteredContainers: []Container{},
 		cursor:             0,
-		sortOrder:          SortByState, // Default sort by State (Running first)
-		showAll:            false,       // Default show running only
+		sortOrder:          SortByState,
+		showAll:            false,
 		tableOffset:        0,
 		showStats:          false,
 		stats:              make(map[string]Stats),
+		activeView:         viewContainers,
 	}
 }
 

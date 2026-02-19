@@ -196,48 +196,6 @@ func calculateNetIO(v statsJSON) (float64, float64) {
 // GetContainerStats fetches stats for a single container.
 // It uses stream=false to get a one-shot snapshot.
 func GetContainerStats(cli *client.Client, containerID string) (Stats, error) {
-	// Use explicit struct as requested by compiler
-	// Assuming Stream: false gives us one shot?
-	// If Stream is false, it might return empty body?
-	// ContainerStats doc: "Get container stats. One-shot if stream is false."
-
-	// We need to verify if `client.ContainerStatsOptions` has a `Stream` field.
-	// Most likely yes.
-
-	// Note: `client` is `github.com/moby/moby/client`.
-	// If types are missing we might need `github.com/docker/docker/api/types/container`.
-	// But the error explicitly said `client.ContainerStatsOptions`.
-
-	// Let's assume it works.
-	// But we can't use `client.ContainerStatsOptions` literal if we aren't sure of fields.
-	// Assuming it's `Stream bool`.
-
-	// Wait, I cannot construct `client.ContainerStatsOptions` if I don't know fields.
-	// But the error output implies that type EXISTS in `client`.
-
-	// Let's try to verify via `go doc` equivalent? I can't.
-	// I'll take a leap of faith that it has a Stream field.
-
-	// Wait! `ContainerStats` in `moby/client` typically takes `Stream bool` directly in v1.xx
-	// BUT `container` (api/types) has `StatsOptions`.
-	// Why does `client` package have `ContainerStatsOptions`?
-	// Maybe it's an alias?
-
-	// Let's just try to compile with `Stream: false`.
-
-	// But wait! If I just pass `true` or `false` I get the error.
-	// So I MUST use the struct.
-
-	// IMPORTANT: I need to handle `view.go` redeclares too.
-
-	// Let's do `docker.go` first.
-
-	// Correction: I replaced the whole function body with comments in previous step.
-	// I need to put back the logic!
-
-	// Oh, I see that I replaced the func with a placeholder `return Stats{}, fmt.Errorf...`
-	// I need to restore the full body.
-
 	resp, err := cli.ContainerStats(context.Background(), containerID, client.ContainerStatsOptions{Stream: false})
 	if err != nil {
 		return Stats{}, err
@@ -253,7 +211,27 @@ func GetContainerStats(cli *client.Client, containerID string) (Stats, error) {
 		CPUPercent: calculateCPUPercent(v),
 		MemUsage:   calculateMemUsage(v),
 		MemLimit:   float64(v.Memory.Limit),
-		NetRx:      func() float64 { r, _ := calculateNetIO(v); return r }(), // simple wrapper
+		NetRx:      func() float64 { r, _ := calculateNetIO(v); return r }(),
 		NetTx:      func() float64 { _, t := calculateNetIO(v); return t }(),
 	}, nil
+}
+
+func StopContainer(cli *client.Client, containerID string) error {
+	_, err := cli.ContainerStop(context.Background(), containerID, client.ContainerStopOptions{})
+	return err
+}
+
+func StartContainer(cli *client.Client, containerID string) error {
+	_, err := cli.ContainerStart(context.Background(), containerID, client.ContainerStartOptions{})
+	return err
+}
+
+func RestartContainer(cli *client.Client, containerID string) error {
+	_, err := cli.ContainerRestart(context.Background(), containerID, client.ContainerRestartOptions{})
+	return err
+}
+
+func RemoveContainer(cli *client.Client, containerID string) error {
+	_, err := cli.ContainerRemove(context.Background(), containerID, client.ContainerRemoveOptions{Force: true})
+	return err
 }

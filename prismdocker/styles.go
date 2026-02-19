@@ -13,7 +13,7 @@ var (
 			BorderForeground(subtle).
 			MarginRight(2)
 
-	ListItemStyle = lipgloss.NewStyle().PaddingLeft(2)
+	ListItemStyle = lipgloss.NewStyle().PaddingLeft(1)
 
 	checkMark = lipgloss.NewStyle().SetString("✓").
 			Foreground(special).
