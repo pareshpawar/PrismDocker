@@ -1,2 +1,5 @@
 # Added by goreleaser init:
 dist/
+
+# Build binary
+prismdocker/prism
