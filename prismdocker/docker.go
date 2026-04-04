@@ -10,12 +10,14 @@ import (
 )
 
 type Container struct {
-	ID     string
-	Names  string
-	Image  string
-	Status string
-	State  string // "running", "exited", etc.
-	Ports  string
+	ID             string
+	Names          string
+	Image          string
+	Status         string
+	State          string // "running", "exited", etc.
+	Ports          string
+	ComposeProject string // from com.docker.compose.project label
+	ComposeService string // from com.docker.compose.service label
 }
 
 func NewDockerClient() (*client.Client, error) {
@@ -54,12 +56,14 @@ func ListContainers(cli *client.Client) ([]Container, error) {
 		}
 
 		result = append(result, Container{
-			ID:     c.ID[:12],
-			Names:  names,
-			Image:  c.Image,
-			Status: c.Status,
-			State:  string(c.State),
-			Ports:  strings.Join(ports, ", "),
+			ID:             c.ID[:12],
+			Names:          names,
+			Image:          c.Image,
+			Status:         c.Status,
+			State:          string(c.State),
+			Ports:          strings.Join(ports, ", "),
+			ComposeProject: c.Labels["com.docker.compose.project"],
+			ComposeService: c.Labels["com.docker.compose.service"],
 		})
 	}
 	return result, nil
@@ -234,4 +238,123 @@ func RestartContainer(cli *client.Client, containerID string) error {
 func RemoveContainer(cli *client.Client, containerID string) error {
 	_, err := cli.ContainerRemove(context.Background(), containerID, client.ContainerRemoveOptions{Force: true})
 	return err
+}
+
+// ContainerInspect holds detailed information about a container.
+type ContainerInspect struct {
+	ID            string
+	Name          string
+	Image         string
+	Created       string
+	State         string
+	RestartPolicy string
+	Env           []string
+	Mounts        []MountInfo
+	Networks      []NetworkInfo
+	Labels        map[string]string
+	Ports         string
+	Cmd           []string
+	Entrypoint    []string
+}
+
+type MountInfo struct {
+	Source      string
+	Destination string
+	Mode        string
+	Type        string
+}
+
+type NetworkInfo struct {
+	Name      string
+	IPAddress string
+	Gateway   string
+}
+
+func InspectContainer(cli *client.Client, containerID string) (ContainerInspect, error) {
+	result, err := cli.ContainerInspect(context.Background(), containerID, client.ContainerInspectOptions{})
+	if err != nil {
+		return ContainerInspect{}, err
+	}
+	info := result.Container
+
+	var mounts []MountInfo
+	for _, m := range info.Mounts {
+		mounts = append(mounts, MountInfo{
+			Source:      m.Source,
+			Destination: m.Destination,
+			Mode:        m.Mode,
+			Type:        string(m.Type),
+		})
+	}
+
+	var networks []NetworkInfo
+	if info.NetworkSettings != nil {
+		for name, net := range info.NetworkSettings.Networks {
+			networks = append(networks, NetworkInfo{
+				Name:      name,
+				IPAddress: net.IPAddress.String(),
+				Gateway:   net.Gateway.String(),
+			})
+		}
+	}
+
+	// Format ports
+	var portStrs []string
+	if info.NetworkSettings != nil {
+		for port, bindings := range info.NetworkSettings.Ports {
+			for _, b := range bindings {
+				portStrs = append(portStrs, fmt.Sprintf("%s:%s->%s", b.HostIP, b.HostPort, port.String()))
+			}
+			if len(bindings) == 0 {
+				portStrs = append(portStrs, port.String())
+			}
+		}
+	}
+
+	restartPolicy := ""
+	if info.HostConfig != nil {
+		restartPolicy = string(info.HostConfig.RestartPolicy.Name)
+	}
+
+	created := info.Created
+	if len(created) > 19 {
+		created = created[:19] // Trim to "2024-01-01T00:00:00"
+	}
+
+	stateStr := ""
+	if info.State != nil {
+		stateStr = string(info.State.Status)
+	}
+
+	var env, cmd, entrypoint []string
+	var labels map[string]string
+	var image string
+	if info.Config != nil {
+		env = info.Config.Env
+		labels = info.Config.Labels
+		image = info.Config.Image
+		cmd = info.Config.Cmd
+		entrypoint = info.Config.Entrypoint
+	}
+
+	id := info.ID
+	if len(id) > 12 {
+		id = id[:12]
+	}
+
+	return ContainerInspect{
+		ID:            id,
+		Name:          strings.TrimPrefix(info.Name, "/"),
+		Image:         image,
+		Created:       created,
+		State:         stateStr,
+		RestartPolicy: restartPolicy,
+		Env:           env,
+		Mounts:        mounts,
+		Networks:      networks,
+		Labels:        labels,
+		Ports:         strings.Join(portStrs, ", "),
+		Cmd:           cmd,
+		Entrypoint:    entrypoint,
+	}, nil
 }

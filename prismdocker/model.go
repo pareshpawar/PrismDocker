@@ -12,6 +12,7 @@ type ActiveView int
 const (
 	viewContainers ActiveView = iota
 	viewLogs
+	viewInspect
 )
 
 const (
@@ -69,6 +70,16 @@ type model struct {
 	logFilterMode bool
 	logOffset     int
 	logContainer  string // ID of container being viewed
+	// Search filter
+	searchMode  bool
+	searchQuery string
+	// Help overlay
+	showHelp bool
+	// Docker Compose grouping
+	groupByCompose bool
+	// Inspect view
+	inspectData   ContainerInspect
+	inspectOffset int
 }
 
 func initialModel() model {
