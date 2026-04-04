@@ -69,4 +69,9 @@ var (
 
 	rowEvenStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("235")) // Very dark gray for zebra stripe
+
+	composeGroupStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("63")).
+				Bold(true).
+				PaddingLeft(1)
 )

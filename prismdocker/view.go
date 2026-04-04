@@ -24,6 +24,10 @@ func (m model) View() string {
 	if m.activeView == viewLogs {
 		return m.renderLogsView()
 	}
+	// Dispatch to inspect viewer
+	if m.activeView == viewInspect {
+		return m.renderInspectView()
+	}
 	// Calculate dynamic widths based on terminal width
 	// Total available width roughly: m.width - 4 (borders/padding)
 	// We want to ensure at least some view.
@@ -137,10 +141,10 @@ func (m model) View() string {
 	prismLogo := lipgloss.JoinVertical(lipgloss.Left, line1, line2, line3, line4)
 
 	// Title next to it
-	titleText := `    ____       _                 
-   / __ \_____(_)________ ___    
-  / /_/ / ___/ / ___/ __  __ \   
- / ____/ /  / (__  ) / / / / /   
+	titleText := `    ____       _
+   / __ \_____(_)________ ___
+  / /_/ / ___/ / ___/ __  __ \
+ / ____/ /  / (__  ) / / / / /
 /_/   /_/  /_/____/_/ /_/ /_/    `
 
 	title := lipgloss.NewStyle().
@@ -162,7 +166,11 @@ func (m model) View() string {
 	if m.showStats {
 		statsLabel = "ON"
 	}
-	statusInfo := fmt.Sprintf("Sort: %s | Show: %s | Stats: %s", m.sortOrder, showStatus, statsLabel)
+	composeLabel := ""
+	if m.groupByCompose {
+		composeLabel = " | Compose: ON"
+	}
+	statusInfo := fmt.Sprintf("Sort: %s | Show: %s | Stats: %s%s", m.sortOrder, showStatus, statsLabel, composeLabel)
 
 	metaInfo := lipgloss.JoinVertical(lipgloss.Right,
 		lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(stats),
@@ -201,7 +209,12 @@ func (m model) View() string {
 
 	// Footer definition (moved up for height interp)
 	// Footer
-	footerText := "↑/k↓/j: Nav • r: Refresh • s: Sort • a: All/Running • t: Stats • S: Stop • u: Start • R: Restart • x: Remove • l: Logs • i: Shell • o: Open • q: Quit"
+	footerText := "↑/k↓/j: Nav • r: Refresh • s: Sort • a: All/Running • t: Stats • g: Compose • /: Search • d: Inspect • ?: Help • q: Quit"
+	if m.searchMode {
+		footerText = fmt.Sprintf("Search: %s█  (Enter to confirm, Esc to cancel)", m.searchQuery)
+	} else if m.searchQuery != "" {
+		footerText = fmt.Sprintf("Filter: \"%s\" • /: Edit • Esc: Clear | %s", m.searchQuery, footerText)
+	}
 	if m.statusMsg != "" {
 		footerText = m.statusMsg
 	}
@@ -226,12 +239,27 @@ func (m model) View() string {
 
 	// Table Rows
 	var rows []string
+	lastProject := ""
 
 	if len(m.filteredContainers) == 0 {
 		rows = append(rows, "No containers found.")
 	} else {
 		for i := start; i < end; i++ {
 			c := m.filteredContainers[i]
+
+			// Compose group separator
+			if m.groupByCompose {
+				project := c.ComposeProject
+				if project == "" {
+					project = "(standalone)"
+				}
+				if project != lastProject {
+					separator := composeGroupStyle.Render(fmt.Sprintf("── %s ──", project))
+					rows = append(rows, separator)
+					lastProject = project
+				}
+			}
+
 			cursor := "  "
 			if m.cursor == i {
 				cursor = "> "
@@ -370,6 +398,10 @@ func (m model) View() string {
 	// Overlay confirm popup if needed
 	if m.confirmMode {
 		return renderConfirmPopup(base, m.width, m.height)
+	}
+	// Overlay help popup if needed
+	if m.showHelp {
+		return renderHelpOverlay(base, m.width, m.height)
 	}
 	return base
 }
@@ -637,6 +669,133 @@ func (m model) renderLogsView() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
+// renderInspectView renders the full-screen container inspect/details view.
+func (m model) renderInspectView() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63"))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("45")).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+
+	d := m.inspectData
+	title := titleStyle.Render(fmt.Sprintf("Inspect: %s (%s)", d.Name, d.ID))
+
+	footerStr := "Esc/q: Back • ↑/k↓/j: Scroll"
+	footer := helpStyle.Render(footerStr)
+
+	// Build content lines
+	var lines []string
+
+	// General Info
+	lines = append(lines, sectionStyle.Render("── General ──"))
+	lines = append(lines, fmt.Sprintf("  %s  %s", labelStyle.Render("Name:"), d.Name))
+	lines = append(lines, fmt.Sprintf("  %s    %s", labelStyle.Render("ID:"), d.ID))
+	lines = append(lines, fmt.Sprintf("  %s %s", labelStyle.Render("Image:"), d.Image))
+	lines = append(lines, fmt.Sprintf("  %s %s", labelStyle.Render("State:"), renderStateColored(d.State)))
+	lines = append(lines, fmt.Sprintf("  %s %s", labelStyle.Render("Created:"), d.Created))
+	if d.RestartPolicy != "" {
+		lines = append(lines, fmt.Sprintf("  %s %s", labelStyle.Render("Restart:"), d.RestartPolicy))
+	}
+	if d.Ports != "" {
+		lines = append(lines, fmt.Sprintf("  %s %s", labelStyle.Render("Ports:"), d.Ports))
+	}
+	if len(d.Cmd) > 0 {
+		lines = append(lines, fmt.Sprintf("  %s %s", labelStyle.Render("Cmd:"), strings.Join(d.Cmd, " ")))
+	}
+	if len(d.Entrypoint) > 0 {
+		lines = append(lines, fmt.Sprintf("  %s %s", labelStyle.Render("Entrypoint:"), strings.Join(d.Entrypoint, " ")))
+	}
+	lines = append(lines, "")
+
+	// Environment Variables
+	if len(d.Env) > 0 {
+		lines = append(lines, sectionStyle.Render("── Environment Variables ──"))
+		for _, e := range d.Env {
+			parts := strings.SplitN(e, "=", 2)
+			if len(parts) == 2 {
+				lines = append(lines, fmt.Sprintf("  %s=%s", labelStyle.Render(parts[0]), dimStyle.Render(parts[1])))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %s", e))
+			}
+		}
+		lines = append(lines, "")
+	}
+
+	// Mounts
+	if len(d.Mounts) > 0 {
+		lines = append(lines, sectionStyle.Render("── Mounts ──"))
+		for _, mt := range d.Mounts {
+			modeStr := ""
+			if mt.Mode != "" {
+				modeStr = fmt.Sprintf(" (%s)", mt.Mode)
+			}
+			lines = append(lines, fmt.Sprintf("  %s %s -> %s%s",
+				dimStyle.Render("["+mt.Type+"]"),
+				labelStyle.Render(mt.Source),
+				mt.Destination,
+				modeStr,
+			))
+		}
+		lines = append(lines, "")
+	}
+
+	// Networks
+	if len(d.Networks) > 0 {
+		lines = append(lines, sectionStyle.Render("── Networks ──"))
+		for _, n := range d.Networks {
+			lines = append(lines, fmt.Sprintf("  %s  IP: %s  Gateway: %s",
+				labelStyle.Render(n.Name),
+				n.IPAddress,
+				dimStyle.Render(n.Gateway),
+			))
+		}
+		lines = append(lines, "")
+	}
+
+	// Labels
+	if len(d.Labels) > 0 {
+		lines = append(lines, sectionStyle.Render("── Labels ──"))
+		for k, v := range d.Labels {
+			lines = append(lines, fmt.Sprintf("  %s=%s", labelStyle.Render(k), dimStyle.Render(v)))
+		}
+		lines = append(lines, "")
+	}
+
+	// Calculate viewport
+	headerH := lipgloss.Height(title) + 1
+	footerH := lipgloss.Height(footer)
+	bodyH := m.height - headerH - footerH - 1
+	if bodyH < 1 {
+		bodyH = 1
+	}
+
+	// Scroll
+	offset := m.inspectOffset
+	if offset > len(lines)-bodyH {
+		offset = len(lines) - bodyH
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	end := offset + bodyH
+	if end > len(lines) {
+		end = len(lines)
+	}
+	visible := lines[offset:end]
+	for len(visible) < bodyH {
+		visible = append(visible, "")
+	}
+
+	body := strings.Join(visible, "\n")
+	return lipgloss.JoinVertical(lipgloss.Left, title, body, footer)
+}
+
+func renderStateColored(state string) string {
+	if state == "running" {
+		return statusUpStyle.Render(state)
+	}
+	return statusExitedStyle.Render(state)
+}
+
 // renderConfirmPopup overlays a centered confirmation dialog on top of the base view.
 func renderConfirmPopup(base string, width, height int) string {
 	popupStyle := lipgloss.NewStyle().
@@ -661,6 +820,61 @@ func renderConfirmPopup(base string, width, height int) string {
 	if top < 0 {
 		top = 0
 	}
+
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, popup,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "0", Dark: "0"}),
+	)
+}
+
+// renderHelpOverlay overlays a centered help popup showing all keybindings.
+func renderHelpOverlay(base string, width, height int) string {
+	popupStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("63")).
+		Padding(1, 3).
+		Width(60)
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63"))
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
+
+	kv := func(key, desc string) string {
+		return fmt.Sprintf("  %s  %s", keyStyle.Width(12).Render(key), descStyle.Render(desc))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		titleStyle.Render("Keybindings"),
+		"",
+		sectionStyle.Render("Navigation"),
+		kv("↑ / k", "Move up"),
+		kv("↓ / j", "Move down"),
+		kv("r", "Refresh"),
+		kv("q", "Quit"),
+		"",
+		sectionStyle.Render("Views & Filters"),
+		kv("s", "Cycle sort order"),
+		kv("a", "Toggle All / Running"),
+		kv("t", "Toggle stats mode"),
+		kv("g", "Toggle Compose grouping"),
+		kv("/", "Search containers"),
+		kv("?", "Toggle this help"),
+		"",
+		sectionStyle.Render("Container Actions"),
+		kv("S", "Stop container"),
+		kv("u", "Start container"),
+		kv("R", "Restart container"),
+		kv("x", "Remove container"),
+		kv("l", "View logs"),
+		kv("d", "Inspect / details"),
+		kv("i / Enter", "Shell into container"),
+		kv("o", "Open in browser"),
+		"",
+		lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("  Press any key to close"),
+	)
+
+	popup := popupStyle.Render(content)
 
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, popup,
 		lipgloss.WithWhitespaceChars(" "),

@@ -16,6 +16,10 @@ type actionMsg struct{ err error }
 type logLineMsg string
 type execDoneMsg struct{ err error }
 type openBrowserMsg struct{}
+type inspectMsg struct {
+	data ContainerInspect
+	err  error
+}
 
 func (e errMsg) Error() string { return e.err.Error() }
 
@@ -41,10 +45,42 @@ func doAction(fn func() error) tea.Cmd {
 	}
 }
 
+func fetchInspect(cli *client.Client, containerID string) tea.Cmd {
+	return func() tea.Msg {
+		data, err := InspectContainer(cli, containerID)
+		return inspectMsg{data, err}
+	}
+}
+
+// applyFilter applies current sort/filter/search/compose settings.
+func (m *model) applyFilter() {
+	if m.groupByCompose {
+		m.filteredContainers = sortAndFilterWithCompose(m.allContainers, m.sortOrder, m.showAll, m.stats, m.searchQuery)
+	} else {
+		m.filteredContainers = sortAndFilter(m.allContainers, m.sortOrder, m.showAll, m.stats, m.searchQuery)
+	}
+}
+
 // Update is the main update loop for the Bubble Tea program.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// ── Inspect view mode ──────────────────────────────────────────
+		if m.activeView == viewInspect {
+			switch msg.String() {
+			case "esc", "q":
+				m.activeView = viewContainers
+				m.inspectOffset = 0
+			case "up", "k":
+				if m.inspectOffset > 0 {
+					m.inspectOffset--
+				}
+			case "down", "j":
+				m.inspectOffset++
+			}
+			return m, nil
+		}
+
 		// ── Log view mode ──────────────────────────────────────────────
 		if m.activeView == viewLogs {
 			switch msg.String() {
@@ -74,6 +110,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// ── Help overlay ───────────────────────────────────────────────
+		if m.showHelp {
+			m.showHelp = false
+			return m, nil
+		}
+
 		// ── Confirm dialog mode ────────────────────────────────────────
 		if m.confirmMode {
 			switch msg.String() {
@@ -87,6 +129,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "n", "N", "esc":
 				m.confirmMode = false
+			}
+			return m, nil
+		}
+
+		// ── Search mode ────────────────────────────────────────────────
+		if m.searchMode {
+			switch msg.String() {
+			case "esc":
+				m.searchMode = false
+				m.searchQuery = ""
+				m.applyFilter()
+				m.cursor = 0
+				m.tableOffset = 0
+			case "enter":
+				m.searchMode = false
+			case "backspace":
+				if len(m.searchQuery) > 0 {
+					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+					m.applyFilter()
+					m.cursor = 0
+					m.tableOffset = 0
+				}
+			default:
+				if len(msg.String()) == 1 {
+					m.searchQuery += msg.String()
+					m.applyFilter()
+					m.cursor = 0
+					m.tableOffset = 0
+				}
 			}
 			return m, nil
 		}
@@ -127,13 +198,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.sortOrder = (m.sortOrder + 1) % 4
 			}
-			m.filteredContainers = sortAndFilter(m.allContainers, m.sortOrder, m.showAll, m.stats)
+			m.applyFilter()
 			m.cursor = 0
 			m.tableOffset = 0
 
 		case "a":
 			m.showAll = !m.showAll
-			m.filteredContainers = sortAndFilter(m.allContainers, m.sortOrder, m.showAll, m.stats)
+			m.applyFilter()
 			m.cursor = 0
 			m.tableOffset = 0
 
@@ -144,9 +215,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				if m.sortOrder == SortByCPU || m.sortOrder == SortByMem {
 					m.sortOrder = SortByState
-					m.filteredContainers = sortAndFilter(m.allContainers, m.sortOrder, m.showAll, m.stats)
+					m.applyFilter()
 				}
 			}
+
+		case "/":
+			m.searchMode = true
+
+		case "?":
+			m.showHelp = !m.showHelp
+
+		case "g":
+			m.groupByCompose = !m.groupByCompose
+			m.applyFilter()
+			m.cursor = 0
+			m.tableOffset = 0
 
 		// ── Container actions ──────────────────────────────────────────
 		case "S": // Stop
@@ -196,6 +279,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.logOffset = 0
 				m.logContainer = c.ID
 				return m, fetchLogs(m.dockerClient, c.ID)
+			}
+
+		case "d": // Inspect/Details
+			if m.cursor < len(m.filteredContainers) {
+				c := m.filteredContainers[m.cursor]
+				m.activeView = viewInspect
+				m.inspectOffset = 0
+				return m, fetchInspect(m.dockerClient, c.ID)
 			}
 
 		case "enter", "i": // Shell exec
@@ -253,7 +344,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case containersMsg:
 		m.allContainers = msg
-		m.filteredContainers = sortAndFilter(m.allContainers, m.sortOrder, m.showAll, m.stats)
+		m.applyFilter()
 		if m.cursor >= len(m.filteredContainers) && len(m.filteredContainers) > 0 {
 			m.cursor = len(m.filteredContainers) - 1
 		} else if len(m.filteredContainers) == 0 {
@@ -263,7 +354,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statsMsg:
 		m.stats = msg
 		if m.sortOrder == SortByCPU || m.sortOrder == SortByMem {
-			m.filteredContainers = sortAndFilter(m.allContainers, m.sortOrder, m.showAll, m.stats)
+			m.applyFilter()
 		}
 
 	case actionMsg:
@@ -279,6 +370,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logLines = msg
 		// Auto-scroll to bottom
 		m.logOffset = len(m.logLines)
+
+	case inspectMsg:
+		if msg.err != nil {
+			m.statusMsg = "Inspect error: " + msg.err.Error()
+			m.activeView = viewContainers
+		} else {
+			m.inspectData = msg.data
+		}
 
 	case execDoneMsg:
 		return m, fetchContainers(m.dockerClient)
